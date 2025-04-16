@@ -11,8 +11,8 @@ from torch_classes import ElectricFieldDataset, ElectricFieldCNN, CustomDataLoad
 
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
-# main_dir = './Dataset'
-main_dir = 'D://Neuron/Dataset'
+main_dir = './Dataset'
+# main_dir = 'D://Neuron/Dataset'
 current_dir = '(0.0001, 0.001, 0.01)_(20, 20, 100)'
 model_dir = 'models'
 
@@ -50,8 +50,6 @@ val_loader = CustomDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 # Создание модели
 model = ElectricFieldCNN()
 
-print(grid_size, '\n')
-print(space_size, '\n')
 print(device)
 # Проверка наличия сохраненной модели
 start_epoch = 0

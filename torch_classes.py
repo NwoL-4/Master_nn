@@ -74,6 +74,7 @@ class CustomDataLoader:
     def _collate_batch(self, batch):
         density = torch.stack([item[0] for item in batch])
         field = torch.stack([item[1] for item in batch])
+        print()
         return density, field
 
     def __len__(self):
@@ -83,10 +84,10 @@ class CustomDataLoader:
 class ResBlock(nn.Module):
     def __init__(self, channels):
         super(ResBlock, self).__init__()
-        self.conv1 = nn.Conv3d(channels, channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm3d(channels)
-        self.conv2 = nn.Conv3d(channels, channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm3d(channels)
+        self.conv1 = nn.Conv3d(channels, channels, kernel_size=3, padding=1, dtype=TORCH_DTYPE)
+        self.bn1 = nn.BatchNorm3d(channels, dtype=TORCH_DTYPE)
+        self.conv2 = nn.Conv3d(channels, channels, kernel_size=3, padding=1, dtype=TORCH_DTYPE)
+        self.bn2 = nn.BatchNorm3d(channels, dtype=TORCH_DTYPE)
 
     def forward(self, x):
         residual = x
@@ -106,23 +107,23 @@ class ElectricFieldCNN(nn.Module):
 
         # Начальная свертка
         self.initial_conv = nn.Sequential(
-            nn.Conv3d(1, 32, kernel_size=3, padding=1),
-            nn.BatchNorm3d(32),
-            nn.ReLU()
+            nn.Conv3d(1, 32, kernel_size=3, padding=1, dtype=TORCH_DTYPE),
+            nn.BatchNorm3d(32, dtype=TORCH_DTYPE),
+            nn.LeakyReLU()
         )
 
         # Энкодер с резидуальными блоками
         self.encoder_res1 = ResBlock(32)
         self.encoder_conv1 = nn.Sequential(
-            nn.Conv3d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm3d(64),
+            nn.Conv3d(32, 64, kernel_size=3, padding=1, dtype=TORCH_DTYPE),
+            nn.BatchNorm3d(64, dtype=TORCH_DTYPE),
             nn.ReLU()
         )
 
         self.encoder_res2 = ResBlock(64)
         self.encoder_conv2 = nn.Sequential(
-            nn.Conv3d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm3d(128),
+            nn.Conv3d(64, 128, kernel_size=3, padding=1, dtype=TORCH_DTYPE),
+            nn.BatchNorm3d(128, dtype=TORCH_DTYPE),
             nn.ReLU()
         )
 
@@ -131,22 +132,22 @@ class ElectricFieldCNN(nn.Module):
         # Декодер с резидуальными блоками
         self.decoder_res1 = ResBlock(128)
         self.decoder_conv1 = nn.Sequential(
-            nn.Conv3d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm3d(64),
+            nn.Conv3d(128, 64, kernel_size=3, padding=1, dtype=TORCH_DTYPE),
+            nn.BatchNorm3d(64, dtype=TORCH_DTYPE),
             nn.ReLU()
         )
 
         self.decoder_res2 = ResBlock(64)
         self.decoder_conv2 = nn.Sequential(
-            nn.Conv3d(64, 32, kernel_size=3, padding=1),
-            nn.BatchNorm3d(32),
+            nn.Conv3d(64, 32, kernel_size=3, padding=1, dtype=TORCH_DTYPE),
+            nn.BatchNorm3d(32, dtype=TORCH_DTYPE),
             nn.ReLU()
         )
 
         self.decoder_res3 = ResBlock(32)
 
         # Финальная свертка
-        self.final_conv = nn.Conv3d(32, 3, kernel_size=3, padding=1)
+        self.final_conv = nn.Conv3d(32, 3, kernel_size=3, padding=1, dtype=TORCH_DTYPE)
 
     def forward(self, x):
         # Начальная обработка

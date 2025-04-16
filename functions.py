@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from numba import prange, njit
 
+import constants
 from constants import *
 
 
@@ -38,7 +39,7 @@ def particles_to_grid_density(particles,
     """
 
     # Создаем пустую сетку для плотности заряда
-    charge_density = torch.zeros(grid_size, device=particles.device)
+    charge_density = torch.zeros(grid_size, device=particles.device, dtype=constants.TORCH_DTYPE)
 
     # Вычисляем шаги сетки по каждому направлению
     dx = space_size[0] / (grid_size[0] - 1)

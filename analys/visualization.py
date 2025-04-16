@@ -2,11 +2,11 @@ import os.path
 
 import numpy as np
 import plotly.graph_objects as go
+import torch
 from plotly.subplots import make_subplots
 from scipy.constants import epsilon_0
 
 import functions
-import main
 
 
 def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
@@ -17,16 +17,16 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
     p_data = f_data['particle']
     field = f_data['field'] / (4 * np.pi * epsilon_0)
 
-    density = functions.particles_to_grid_density(p_data, grid_size, space_size).numpy()
+    density = functions.particles_to_grid_density(torch.from_numpy(p_data), grid_size, space_size).numpy()
 
     SPACE = space_size
     NNODES = grid_size
 
-    colorsparticle = ['rgba(255, 0, 0, 1)' if p_data[3][index] == -1 else 'rgba(0, 0, 255, 1)'
+    colorsparticle = ['#890000' if p_data[3][index] == -1 else '#100089'
                       for index in range(p_data.shape[1])]
 
     print('Электрическая напряженность в пространстве\n'
-          f'Максимальная: {np.abs(field).max()}\n'
+          f'Максимальная по абсолютному значению: {np.abs(field).max()}\n'
           f'Средняя: {field.mean()}\n'
           f'Средняя по абсолютному значению {np.abs(field).mean()}')
 
@@ -65,6 +65,7 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
     #     )
     # )
 
+
     fig.add_trace(
         go.Scatter3d(
             x=X.flatten(),
@@ -72,17 +73,18 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
             z=Z.flatten(),
             mode='markers',
             marker=dict(
-                size=5,
+                size=25 * np.abs((density/np.abs(density).max()).flatten()),
                 color=density.flatten(),
-                colorscale='Viridis',
-                opacity=0.8,
-                symbol='circle'
+                colorscale=[[0, 'red'], [0.5, 'white'], [1, 'blue']],
+                opacity=1,
+                symbol='circle',
+                colorbar_title='Плотность узла',
+                sizemode='diameter',
             ),
             text=density.flatten(),
             name='Плотность в узлах',
         )
     )
-
     # Частицы (точечное облако)
     fig.add_trace(
         go.Scatter3d(
@@ -91,8 +93,8 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
             z=p_data[2],
             mode='markers',
             marker=dict(
-                size=2,
-                color=colorsparticle,  # Полупрозрачный красный
+                size=1,
+                color=colorsparticle,
                 symbol='circle'
             ),
             name='Заряженные частицы'
@@ -101,6 +103,12 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
 
     # Настройка вида
     fig.update_layout(
+        legend=dict(
+            yanchor='top',
+            y=1,
+            xanchor='left',
+            x=0,
+        ),
         scene=dict(
             xaxis=dict(
                 range=[0, max_xyz[0]],
@@ -115,7 +123,7 @@ def load_and_visualize(f_name: str, max_xyz: np.ndarray, downsample: int = 3):
             aspectratio=dict(x=1, y=1, z=2),
             camera=dict(eye=dict(x=1.5, y=1.5, z=0.5))
         ),
-        title_text=f'3D визуализация поля и частиц: Число частиц: {p_data.shape[0]}'
+        title_text=f'3D визуализация поля и частиц: Число частиц: {p_data.shape[0] if p_data.shape[1] == 4 else p_data.shape[1]}'
     )
 
     fig.show()
@@ -131,6 +139,6 @@ grid_size = tuple(np.fromstring(folder.split('_')[1][1:-1], sep=', ', dtype=np.i
 space_size = tuple(np.fromstring(folder.split('_')[0][1:-1], sep=', ', dtype=np.float64))
 path = os.path.join(main_folder, folder)
 
-max_xyz = np.fromstring(path.split('/')[-1].split('_')[0][1:-1], dtype=main.DTYPE, sep=', ')
+max_xyz = np.fromstring(path.split('/')[-1].split('_')[0][1:-1], dtype=np.float64, sep=', ')
 # Пример использования
 load_and_visualize(os.path.join(path, filename), max_xyz, downsample=1)

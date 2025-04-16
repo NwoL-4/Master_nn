@@ -2,13 +2,11 @@ import glob
 import os
 import time
 
-import numpy as np
 import torch
 from scipy.constants import epsilon_0
 from torch import nn, optim
 
 from constants import *
-
 
 EPSILON = 1e-10
 K_CONST = 4 * np.pi * epsilon_0
@@ -16,7 +14,8 @@ K_CONST = 4 * np.pi * epsilon_0
 
 def check_poisson_equation(charge_density: torch.Tensor,
                            e_field: torch.Tensor,
-                           space_size: tuple[float, float, float]) -> torch.Tensor:
+                           space_size: tuple[float, float, float],
+                           device) -> torch.Tensor:
     """
     Проверяет уравнение Пуассона: ∇²φ = -ρ * coef
     где φ получаем интегрированием E = -∇φ
@@ -25,13 +24,12 @@ def check_poisson_equation(charge_density: torch.Tensor,
         charge_density: Тензор плотности заряда (nx, ny, nz)
         e_field: Тензор электрического поля (3, nx, ny, nz)
         space_size: Размеры пространства (Lx, Ly, Lz)
-        coef: константа
 
     Returns:
         torch.Tensor: Относительная ошибка уравнения Пуассона
 
     """
-    nx, ny, nz = charge_density.size()
+    batch_size, _, nx, ny, nz = charge_density.size()
     dx = space_size[0] / (nx - 1)
     dy = space_size[1] / (ny - 1)
     dz = space_size[2] / (nz - 1)
@@ -40,78 +38,80 @@ def check_poisson_equation(charge_density: torch.Tensor,
     # E = -∇φ => φ = -∫E·dr
 
     # Интегрирование по x
-    potential_x = torch.zeros_like(charge_density)
+    potential_x = torch.zeros_like(charge_density).to(device)
     for i in range(1, nx):
-        potential_x[i, :, :] = potential_x[i - 1, :, :] - e_field[:, :, 0, i, :, :] * dx
+        potential_x[:, :, i, :, :] = potential_x[:, :, i - 1, :, :] - e_field[:, 0, i, :, :].unsqueeze(1) * dx
 
     # Интегрирование по y
-    potential_y = torch.zeros_like(charge_density)
+    potential_y = torch.zeros_like(charge_density).to(device)
     for j in range(1, ny):
-        potential_y[:, j, :] = potential_y[:, j - 1, :] - e_field[:, :, 1, :, j, :] * dy
+        potential_y[:, :, :, j, :] = potential_y[:, :, :, j - 1, :] - e_field[:, 1, :, j, :].unsqueeze(1) * dy
 
     # Интегрирование по z
-    potential_z = torch.zeros_like(charge_density)
+    potential_z = torch.zeros_like(charge_density).to(device)
     for k in range(1, nz):
-        potential_z[:, :, k] = potential_z[:, :, k - 1] - e_field[:, :, 2, :, :, k] * dz
-
-    # Усредняем потенциалы, полученные разными путями
-    potential = (potential_x + potential_y + potential_z) / 3.0
+        potential_z[:, :, :, :, k] = potential_z[:, :, :, :, k - 1] - e_field[:, 2, :, :, k].unsqueeze(1) * dz
 
     # Вычисляем взвешенное среднее с учетом расстояния от начала координат
-    x = torch.linspace(0, space_size[0], nx, dtype=DTYPE)
-    y = torch.linspace(0, space_size[1], ny)
-    z = torch.linspace(0, space_size[2], nz)
+    x = torch.linspace(0, space_size[0], nx, dtype=TORCH_DTYPE).to(device)
+    y = torch.linspace(0, space_size[1], ny, dtype=TORCH_DTYPE).to(device)
+    z = torch.linspace(0, space_size[2], nz, dtype=TORCH_DTYPE).to(device)
     X, Y, Z = torch.meshgrid(x, y, z, indexing='ij')
+
+    # Расширяем размерности для батча
+    X = X.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1, -1).to(device)
+    Y = Y.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1, -1).to(device)
+    Z = Z.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1, -1).to(device)
 
     # Веса обратно пропорциональны расстоянию от начала интегрирования
     wx = 1.0 / (X + EPSILON)
     wy = 1.0 / (Y + EPSILON)
     wz = 1.0 / (Z + EPSILON)
 
-    # Нормализуем веса
-    wx = wx / (wx + wy + wz)
-    wy = wy / (wx + wy + wz)
-    wz = wz / (wx + wy + wz)
+    # Нормализация весов
+    w_sum = wx + wy + wz
+    wx = (wx / w_sum).to(device)
+    wy = (wy / w_sum).to(device)
+    wz = (wz / w_sum).to(device)
 
     # Взвешенное среднее
     potential = (wx * potential_x + wy * potential_y + wz * potential_z)
 
     # 2. Вычисляем лапласиан потенциала (∇²φ)
     # Используем схему 4-го порядка для внутренних точек
-    laplacian = torch.zeros_like(potential)
+    laplacian = torch.zeros_like(potential).to(device)
 
     # Внутренние точки (4-й порядок точности)
-    laplacian[2:-2, 2:-2, 2:-2] = (
+    laplacian[:, :, 2:-2, 2:-2, 2:-2] = (
         # По x
-            (-potential[4:, 2:-2, 2:-2] + 16 * potential[3:-1, 2:-2, 2:-2] -
-             30 * potential[2:-2, 2:-2, 2:-2] + 16 * potential[1:-3, 2:-2, 2:-2] -
-             potential[:-4, 2:-2, 2:-2]) / (12 * dx ** 2) +
-            # По y
-            (-potential[2:-2, 4:, 2:-2] + 16 * potential[2:-2, 3:-1, 2:-2] -
-             30 * potential[2:-2, 2:-2, 2:-2] + 16 * potential[2:-2, 1:-3, 2:-2] -
-             potential[2:-2, :-4, 2:-2]) / (12 * dy ** 2) +
-            # По z
-            (-potential[2:-2, 2:-2, 4:] + 16 * potential[2:-2, 2:-2, 3:-1] -
-             30 * potential[2:-2, 2:-2, 2:-2] + 16 * potential[2:-2, 2:-2, 1:-3] -
-             potential[2:-2, 2:-2, :-4]) / (12 * dz ** 2)
+        (-potential[:, :, 4:, 2:-2, 2:-2] + 16 * potential[:, :, 3:-1, 2:-2, 2:-2] -
+         30 * potential[:, :, 2:-2, 2:-2, 2:-2] + 16 * potential[:, :, 1:-3, 2:-2, 2:-2] -
+         potential[:, :, :-4, 2:-2, 2:-2]) / (12 * dx ** 2) +
+        # По y
+        (-potential[:, :, 2:-2, 4:, 2:-2] + 16 * potential[:, :, 2:-2, 3:-1, 2:-2] -
+         30 * potential[:, :, 2:-2, 2:-2, 2:-2] + 16 * potential[:, :, 2:-2, 1:-3, 2:-2] -
+         potential[:, :, 2:-2, :-4, 2:-2]) / (12 * dy ** 2) +
+        # По z
+        (-potential[:, :, 2:-2, 2:-2, 4:] + 16 * potential[:, :, 2:-2, 2:-2, 3:-1] -
+         30 * potential[:, :, 2:-2, 2:-2, 2:-2] + 16 * potential[:, :, 2:-2, 2:-2, 1:-3] -
+         potential[:, :, 2:-2, 2:-2, :-4]) / (12 * dz ** 2)
     )
 
     # Граничные точки (2-й порядок точности)
-    for i in [0, 1, -2, -1]:
+    for i in [0, -1]:
         for j in range(ny):
             for k in range(nz):
-                if i in [0, -1]:  # Крайние точки
-                    laplacian[i, j, k] = (
-                            (potential[(i + 1) % nx, j, k] - 2 * potential[i, j, k] + potential[
-                                i - 1, j, k]) / dx ** 2 +
-                            (potential[i, (j + 1) % ny, k] - 2 * potential[i, j, k] + potential[
-                                i, (j - 1) % ny, k]) / dy ** 2 +
-                            (potential[i, j, (k + 1) % nz] - 2 * potential[i, j, k] + potential[
-                                i, j, (k - 1) % nz]) / dz ** 2
-                    )
+                laplacian[:, :, i, j, k] = (
+                        (potential[:, :, (i + 1) % nx, j, k] - 2 * potential[:, :, i, j, k] +
+                         potential[:, :, i - 1, j, k]) / dx ** 2 +
+                        (potential[:, :, i, (j + 1) % ny, k] - 2 * potential[:, :, i, j, k] +
+                         potential[:, :, i, (j - 1) % ny, k]) / dy ** 2 +
+                        (potential[:, :, i, j, (k + 1) % nz] - 2 * potential[:, :, i, j, k] +
+                         potential[:, :, i, j, (k - 1) % nz]) / dz ** 2
+                )
 
     # 3. Проверяем уравнение Пуассона
-    theoretical = -charge_density / epsilon_0
+    theoretical = (-charge_density / epsilon_0).to(device)
 
     # Вычисляем относительную ошибку
     error = torch.abs(laplacian - theoretical) / (torch.abs(theoretical) + EPSILON)
@@ -121,35 +121,39 @@ def check_poisson_equation(charge_density: torch.Tensor,
 
 def check_gauss_law(charge_density: torch.Tensor,
                     e_field: torch.Tensor,
-                    space_size: tuple[float, float, float]) -> torch.Tensor:
+                    space_size: tuple[float, float, float],
+                    device) -> torch.Tensor:
     """
-    Проверяет закон Гаусса: div E = ρ*const
+    Проверяет закон Гаусса: div E = ρ*const с учетом батчей
 
+    Args:
+        charge_density: [batch_size, 1, nx, ny, nz]
+        e_field: [batch_size, 3, nx, ny, nz]
+        space_size: (Lx, Ly, Lz)
     Returns:
         torch.Tensor: Относительная ошибка в каждой точке
     """
-    print(charge_density.size())
-    print(e_field.size())
-    _, _, nx, ny, nz = charge_density.size()
+    batch_size, _, nx, ny, nz = charge_density.size()
+
     dx = space_size[0] / (nx - 1)
     dy = space_size[1] / (ny - 1)
     dz = space_size[2] / (nz - 1)
 
     # Используем схему 4-го порядка для дивергенции
-    div_E = torch.zeros_like(charge_density)
+    div_E = torch.zeros_like(charge_density).to(device)
 
     # Внутренние точки (4-й порядок)
-    div_E[2:-2, 2:-2, 2:-2] = (
-            (-e_field[:, :, 0, 4:, 2:-2, 2:-2] + 8 * e_field[:, :, 0, 3:-1, 2:-2, 2:-2] -
-             8 * e_field[:, :, 0, 1:-3, 2:-2, 2:-2] + e_field[:, :, 0, :-4, 2:-2, 2:-2]) / (12 * dx) +
-            (-e_field[:, :, 1, 2:-2, 4:, 2:-2] + 8 * e_field[:, :, 1, 2:-2, 3:-1, 2:-2] -
-             8 * e_field[:, :, 1, 2:-2, 1:-3, 2:-2] + e_field[:, :, 1, 2:-2, :-4, 2:-2]) / (12 * dy) +
-            (-e_field[:, :, 2, 2:-2, 2:-2, 4:] + 8 * e_field[:, :, 2, 2:-2, 2:-2, 3:-1] -
-             8 * e_field[:, :, 2, 2:-2, 2:-2, 1:-3] + e_field[:, :, 2, 2:-2, 2:-2, :-4]) / (12 * dz)
+    div_E[:, 0, 2:-2, 2:-2, 2:-2] = (
+            (-e_field[:, 0, 4:, 2:-2, 2:-2] + 8 * e_field[:, 0, 3:-1, 2:-2, 2:-2] -
+             8 * e_field[:, 0, 1:-3, 2:-2, 2:-2] + e_field[:, 0, :-4, 2:-2, 2:-2]) / (12 * dx) +
+            (-e_field[:, 1, 2:-2, 4:, 2:-2] + 8 * e_field[:, 1, 2:-2, 3:-1, 2:-2] -
+             8 * e_field[:, 1, 2:-2, 1:-3, 2:-2] + e_field[:, 1, 2:-2, :-4, 2:-2]) / (12 * dy) +
+            (-e_field[:, 2, 2:-2, 2:-2, 4:] + 8 * e_field[:, 2, 2:-2, 2:-2, 3:-1] -
+             8 * e_field[:, 2, 2:-2, 2:-2, 1:-3] + e_field[:, 2, 2:-2, 2:-2, :-4]) / (12 * dz)
     )
 
-    theoretical = charge_density / epsilon_0
-    error = torch.abs(div_E - theoretical) / (torch.abs(theoretical) + 1e-10)
+    theoretical = (charge_density / epsilon_0).to(device)
+    error = torch.abs(div_E - theoretical) / (torch.abs(theoretical) + EPSILON)
 
     return error
 
@@ -193,7 +197,7 @@ def train_model(model,
             try:
                 if batch_idx % log_interval == 0: # Логируем каждые 10 батчей
                     end_time = time.time()
-                    print(f"Processing batch {batch_idx}/{len(train_loader)}: {end_time - start_time}")
+                    print(f"Processing batch {batch_idx}/{len(train_loader)}: {end_time - start_time} c.")
                     start_time = time.time()
 
                 density = density.to(device)
@@ -206,24 +210,21 @@ def train_model(model,
 
                 # Вычисление потерь
                 mse_loss = criterion(model_field, train_field)
-                print('start gauss')
-                gauss_loss = check_gauss_law(density, model_field / K_CONST, space_size)
-                print('start poisson')
-                poisson_loss = check_poisson_equation(density, model_field / K_CONST, space_size)
-                print('finish')
+                gauss_loss = check_gauss_law(density, model_field / K_CONST, space_size, device)
+                poisson_loss = check_poisson_equation(density, model_field / K_CONST, space_size, device)
                 # Общая функция потерь (с весами)
                 total_loss = (
                         mse_loss +
-                        0.1 * poisson_loss
-                        # 0.1 * gauss_loss
+                        # 0.1 * poisson_loss.mean()
+                        0.1 * gauss_loss.mean()
                 )
 
                 total_loss.backward()
                 optimizer.step()
 
                 train_losses += mse_loss.item()
-                poisson_losses += poisson_loss.item()
-                gauss_losses += gauss_loss.item()
+                poisson_losses += poisson_loss.mean()
+                gauss_losses += gauss_loss.mean()
 
                 batch_count += 1
 
@@ -268,9 +269,6 @@ def train_model(model,
                 del model_field
                 if device == 'cuda':
                     torch.cuda.empty_cache()
-
-        print(f'Epoch {epoch + 1}/{num_epochs}:')
-        print(f'Train Loss: {train_losses / len(train_loader):.6f}')
-        print(f'Gauss Loss: {gauss_losses / len(train_loader):.6f}')
-        print(f'Poissons Loss: {poisson_losses / len(train_loader):.6f}')
-        print(f'Val Loss: {val_loss / len(val_loader):.6f}')
+            torch.save({
+                'val_loss': val_loss
+            }, os.path.join('validation', 'val_loss_{epoch}.pth'))
