@@ -1,14 +1,13 @@
 import glob
+import os
 
-import plotly
-import plotly.graph_objects as go
+import numpy as np
+import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+import torch
 import tqdm
 from plotly.subplots import make_subplots
-import numpy as np
-import torch
-import os
-import pandas as pd
 
 
 class BatchWeightVisualizer:
@@ -84,15 +83,16 @@ class BatchWeightVisualizer:
         files = glob.glob(patern)
         numbers = sorted([int(f.split('_')[-1].split('.')[0]) for f in files])
 
-        for number in tqdm.tqdm(numbers[:5]):
+        for number in tqdm.tqdm(numbers):
             self.extract_checkpoint_data(patern.replace('*', str(number)))
 
         print(f"Loaded data from {len(self.weight_history)} epochs")
 
     def create_weight_evolution_animation(self):
         """
-        Создает анимированный график эволюции весов по батчам с разными цветами
+        Создает анимированный график эволюции весов по батчам с отдельными графиками для каждого слоя
         """
+        # Подготовка данных
         data = []
         for epoch in self.weight_history:
             for batch in self.weight_history[epoch]:
@@ -107,100 +107,131 @@ class BatchWeightVisualizer:
                         'min': layer_data['min'],
                         'max': layer_data['max'],
                         'median': layer_data['median'],
-                        'name': layer_data['name']
                     })
 
         df = pd.DataFrame(data)
-        df = df.sort_values(['epoch', 'batch', 'layer'])  # Сортировка
+        df = df.sort_values(['epoch', 'batch'])
 
-        # Создаем цветовую палитру для слоев
+        # Создаем цветовую палитру
         colors = (px.colors.qualitative.Set3 + px.colors.qualitative.Set2)[:len(self.layer_names)]
         color_map = dict(zip(self.layer_names, colors))
 
+        # Создаем подграфики
         fig = make_subplots(
             rows=2, cols=2,
             subplot_titles=('Mean Weights', 'Std Weights',
-                            'Min/Max Weights', 'Median Weights')
+                            'Min/Max Weights', 'Median Weights'),
+            vertical_spacing=0.15,
+            horizontal_spacing=0.1
         )
 
+        # Создаем фреймы для каждой эпохи
         frames = []
         for epoch in df['epoch'].unique():
             epoch_data = df[df['epoch'] == epoch]
 
-            frame_data = []
+            frame_traces = []
+
+            # Mean weights (row=1, col=1)
             for layer in self.layer_names:
                 layer_data = epoch_data[epoch_data['layer'] == layer]
-                # Mean weights
-                frame_data.append(
+                frame_traces.append(
                     go.Scatter(
                         x=layer_data['batch'],
                         y=layer_data['mean'],
                         mode='lines+markers',
-                        name=f'{layer} mean',
+                        name=layer,
+                        legendgroup=layer,
                         line=dict(color=color_map[layer]),
-                        showlegend=True
+                        showlegend=True,
+                        xaxis='x1',
+                        yaxis='y1'
                     )
                 )
 
-                # Std weights
-                frame_data.append(
+            # Std weights (row=1, col=2)
+            for layer in self.layer_names:
+                layer_data = epoch_data[epoch_data['layer'] == layer]
+                frame_traces.append(
                     go.Scatter(
                         x=layer_data['batch'],
                         y=layer_data['std'],
                         mode='lines+markers',
-                        name=f'{layer} std',
+                        name=layer,
+                        legendgroup=layer,
                         line=dict(color=color_map[layer]),
-                        showlegend=True
+                        showlegend=False,
+                        xaxis='x2',
+                        yaxis='y2'
                     )
                 )
 
-                # Min/Max weights
-                frame_data.extend([
+            # Min/Max weights (row=2, col=1)
+            for layer in self.layer_names:
+                layer_data = epoch_data[epoch_data['layer'] == layer]
+                frame_traces.extend([
                     go.Scatter(
                         x=layer_data['batch'],
                         y=layer_data['min'],
                         mode='lines',
-                        name=f"{layer} min",
+                        name=f"{layer} (min)",
+                        legendgroup=layer,
                         line=dict(color=color_map[layer], dash='dash'),
-                        showlegend=True
+                        showlegend=False,
+                        xaxis='x3',
+                        yaxis='y3'
                     ),
                     go.Scatter(
                         x=layer_data['batch'],
                         y=layer_data['max'],
                         mode='lines',
-                        name=f"{layer} max",
+                        name=f"{layer} (max)",
+                        legendgroup=layer,
                         line=dict(color=color_map[layer]),
-                        showlegend=True
+                        showlegend=False,
+                        xaxis='x3',
+                        yaxis='y3'
                     )
                 ])
 
-                # Median weights
-                frame_data.append(
+            # Median weights (row=2, col=2)
+            for layer in self.layer_names:
+                layer_data = epoch_data[epoch_data['layer'] == layer]
+                frame_traces.append(
                     go.Scatter(
                         x=layer_data['batch'],
                         y=layer_data['median'],
                         mode='lines+markers',
-                        name=f'{layer} median',
+                        name=layer,
+                        legendgroup=layer,
                         line=dict(color=color_map[layer]),
-                        showlegend=True
+                        showlegend=False,
+                        xaxis='x4',
+                        yaxis='y4'
                     )
                 )
 
-            frames.append(go.Frame(data=frame_data, name=f'epoch_{epoch}'))
-
-        indices = [[1, 1], [1, 2], [2, 1], [2, 1], [2, 2]]
+            frames.append(go.Frame(data=frame_traces, name=f'epoch_{epoch}'))
 
         # Добавляем начальные графики
-        for ind, trace in zip(indices, frames[0].data):
-            fig.add_trace(trace, row=ind[0], col=ind[1])
-
-        fig.frames = frames
+        for trace in frames[0].data:
+            fig.add_trace(trace)
 
         # Обновляем layout
         fig.update_layout(
+            showlegend=True,
+            legend=dict(
+                # groupclick="toggleitem",
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=1.05
+            ),
             updatemenus=[{
                 'type': 'buttons',
                 'showactive': False,
+                'y': 0,
+                'x': 0,
                 'buttons': [
                     {'label': 'Play',
                      'method': 'animate',
@@ -215,21 +246,23 @@ class BatchWeightVisualizer:
             }],
             sliders=[{
                 'currentvalue': {'prefix': 'Epoch: '},
+                'pad': {"t": 50},
                 'steps': [{'method': 'animate',
-                           'label': f'Batch {batch}',
-                           'args': [[f'batch_{batch}'], {'frame': {'duration': 0, 'redraw': True},
+                           'label': f'Epoch {epoch}',
+                           'args': [[f'epoch_{epoch}'], {'frame': {'duration': 0, 'redraw': True},
                                                          'mode': 'immediate',
                                                          'transition': {'duration': 0}}]}
-                          for batch in sorted(df['batch'].unique())]
-            }],
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=1.05
-            )
+                          for epoch in sorted(df['epoch'].unique())]
+            }]
         )
+
+        # Обновляем оси
+        fig.update_xaxes(title_text="Batch", row=2, col=1)
+        fig.update_xaxes(title_text="Batch", row=2, col=2)
+        fig.update_yaxes(title_text="Weight Value", row=1, col=1)
+        fig.update_yaxes(title_text="Standard Deviation", row=1, col=2)
+        fig.update_yaxes(title_text="Min/Max Values", row=2, col=1)
+        fig.update_yaxes(title_text="Median Value", row=2, col=2)
 
         return fig
 
@@ -285,95 +318,238 @@ class BatchWeightVisualizer:
 
     def create_layer_weight_distribution_animation(self):
         """
-        Создает анимированную гистограмму распределения весов по слоям со слайдером
+        Создает анимированную гистограмму распределения весов с выбором слоя
+        и слайдером для каждого слоя
         """
+        # Подготавливаем данные
+        data = []
+        for epoch in self.weight_history:
+            for batch in self.weight_history[epoch]:
+                for layer_name, layer_data in self.weight_history[epoch][batch].items():
+                    hist_values, hist_bins = layer_data['hist']
+                    bin_centers = (hist_bins[:-1] + hist_bins[1:]) / 2
+
+                    data.extend([{
+                        'epoch': epoch,
+                        'batch': batch,
+                        'layer': layer_name,
+                        'bin_center': bin_center,
+                        'frequency': freq,
+                        'bin_left': left,
+                        'bin_right': right,
+                        'mean': layer_data['mean'],
+                        'std': layer_data['std'],
+                        'min': layer_data['min'],
+                        'max': layer_data['max'],
+                        'median': layer_data['median']
+                    } for bin_center, freq, left, right in zip(
+                        bin_centers,
+                        hist_values,
+                        hist_bins[:-1],
+                        hist_bins[1:]
+                    )])
+
+        df = pd.DataFrame(data)
+        df = df.sort_values(['layer', 'epoch', 'batch'])
+
+        # Создаем цветовую палитру для слоев
+        colors = (px.colors.qualitative.Set2 + px.colors.qualitative.Set3)[:len(self.layer_names)]
+        color_map = dict(zip(self.layer_names, colors))
+
         fig = go.Figure()
 
-        epochs = sorted(self.weight_history.keys())
-        first_epoch = epochs[0]
-        first_batch = sorted(self.weight_history[first_epoch].keys())[0]
-
-        # Создаем начальные гистограммы
-        for layer_name in self.layer_names:
-            hist_data = self.weight_history[first_epoch][first_batch][layer_name]['hist']
-            fig.add_trace(go.Bar(
-                x=hist_data[1],
-                y=hist_data[0],
-                name=layer_name,
-                visible=True if layer_name == self.layer_names[0] else False
-            ))
-
-        # Создаем кнопки для переключения между слоями
-        buttons = []
-        for idx, layer_name in enumerate(self.layer_names):
-            visibility = [idx == j for j in range(len(self.layer_names))]
-            buttons.append(dict(
-                label=layer_name,
-                method="update",
-                args=[{"visible": visibility}]
-            ))
-
-        # Создаем frames для анимации
+        # Создаем фреймы для каждого слоя, эпохи и батча
         frames = []
-        slider_steps = []
 
-        for epoch in epochs:
-            for batch in sorted(self.weight_history[epoch].keys()):
-                frame_data = []
-                for layer_name in self.layer_names:
-                    hist_data = self.weight_history[epoch][batch][layer_name]['hist']
-                    frame_data.append(go.Bar(
-                        x=hist_data[1],
-                        y=hist_data[0],
-                        name=layer_name,
-                        visible=True if layer_name == self.layer_names[0] else False
-                    ))
+        for layer_name in self.layer_names:
+            layer_data = df[df['layer'] == layer_name]
 
-                frame_name = f'epoch_{epoch}_batch_{batch}'
-                frames.append(go.Frame(data=frame_data, name=frame_name))
+            for epoch in layer_data['epoch'].unique():
+                epoch_data = layer_data[layer_data['epoch'] == epoch]
 
-                # Добавляем шаг для слайдера
-                slider_steps.append({
-                    'args': [
-                        [frame_name],
-                        {'frame': {'duration': 0, 'redraw': True},
-                         'mode': 'immediate',
-                         'transition': {'duration': 0}}
+                for batch in epoch_data['batch'].unique():
+                    batch_data = epoch_data[epoch_data['batch'] == batch]
+
+                    stats_text = (
+                        f"Statistics:<br>"
+                        f"Mean: {batch_data['mean'].iloc[0]:.6f}<br>"
+                        f"Std: {batch_data['std'].iloc[0]:.6f}<br>"
+                        f"Min: {batch_data['min'].iloc[0]:.6f}<br>"
+                        f"Max: {batch_data['max'].iloc[0]:.6f}<br>"
+                        f"Median: {batch_data['median'].iloc[0]:.6f}"
+                    )
+
+                    frame_data = [
+                        # Гистограмма
+                        go.Bar(
+                            x=batch_data['bin_center'],
+                            y=batch_data['frequency'],
+                            name=layer_name,
+                            marker_color=color_map[layer_name],
+                            customdata=np.stack((
+                                batch_data['bin_left'],
+                                batch_data['bin_right']
+                            ), axis=-1),
+                            hovertemplate=(
+                                "Range: [%{customdata[0]:.6f}, %{customdata[1]:.6f}]<br>"
+                                "Frequency: %{y}<br>"
+                                "<extra></extra>"
+                            )
+                        ),
+                        # Вертикальная линия для среднего значения
+                        go.Scatter(
+                            x=[batch_data['mean'].iloc[0], batch_data['mean'].iloc[0]],
+                            y=[0, batch_data['frequency'].max()],
+                            mode='lines',
+                            name='Mean',
+                            line=dict(color='red', dash='dash'),
+                            showlegend=False
+                        ),
+                        # Вертикальная линия для медианы
+                        go.Scatter(
+                            x=[batch_data['median'].iloc[0], batch_data['median'].iloc[0]],
+                            y=[0, batch_data['frequency'].max()],
+                            mode='lines',
+                            name='Median',
+                            line=dict(color='green', dash='dash'),
+                            showlegend=False
+                        )
+                    ]
+
+                    frames.append(
+                        go.Frame(
+                            data=frame_data,
+                            name=f'{layer_name}_epoch_{epoch}_batch_{batch}',
+                            layout=go.Layout(
+                                annotations=[
+                                    dict(
+                                        text=stats_text,
+                                        xref="paper",
+                                        yref="paper",
+                                        x=1.15,
+                                        y=0.5,
+                                        showarrow=False,
+                                        font=dict(size=12),
+                                        align="left"
+                                    )
+                                ]
+                            )
+                        )
+                    )
+
+        # Добавляем начальные данные (первый фрейм)
+        first_frame = frames[0]
+        for trace in first_frame.data:
+            fig.add_trace(trace)
+
+        # Создаем кнопки для выбора слоя
+        layer_buttons = []
+        for layer_name in self.layer_names:
+            layer_data = df[df['layer'] == layer_name]
+            slider_steps = []
+
+            for epoch in layer_data['epoch'].unique():
+                epoch_data = layer_data[layer_data['epoch'] == epoch]
+                for batch in epoch_data['batch'].unique():
+                    frame_name = f'{layer_name}_epoch_{epoch}_batch_{batch}'
+                    slider_steps.append(
+                        {
+                            'args': [
+                                [frame_name],
+                                {'frame': {'duration': 0, 'redraw': True},
+                                 'mode': 'immediate',
+                                 'transition': {'duration': 0}}
+                            ],
+                            'label': f'E{epoch}B{batch}',
+                            'method': 'animate'
+                        }
+                    )
+
+            # Добавляем кнопку для слоя с соответствующим слайдером
+            layer_buttons.append(
+                dict(
+                    args=[
+                        {"sliders": [{
+                            'active': 0,
+                            'yanchor': 'top',
+                            'xanchor': 'left',
+                            'currentvalue': {
+                                'font': {'size': 16},
+                                'prefix': f'{layer_name} - ',
+                                'visible': True,
+                                'xanchor': 'right'
+                            },
+                            'transition': {'duration': 0},
+                            'pad': {'b': 10, 't': 50},
+                            'len': 0.9,
+                            'x': 0.1,
+                            'y': 0,
+                            'steps': slider_steps
+                        }]}
                     ],
-                    'label': f'E{epoch}B{batch}',
-                    'method': 'animate'
-                })
+                    label=layer_name,
+                    method="relayout"
+                )
+            )
 
-        fig.frames = frames
-
+        # Создаем слайдер для первого слоя
+        first_layer = df['layer'].unique()[0]
+        first_layer_frames = [frame for frame in frames if frame.name.startswith(first_layer)]
+        first_layer_steps = []
+    
+        for frame in first_layer_frames:
+            epoch_batch = frame.name.split('_')
+            epoch = epoch_batch[2]
+            batch = epoch_batch[4]
+    
+            first_layer_steps.append({
+                'args': [
+                    [frame.name],
+                    {'frame': {'duration': 0, 'redraw': True},
+                     'mode': 'immediate',
+                     'transition': {'duration': 0}}
+                ],
+                'label': f'E{epoch}B{batch}',
+                'method': 'animate'
+            })
+    
         # Обновляем layout
         fig.update_layout(
             updatemenus=[
+                # Меню выбора слоя
+                {
+                    'buttons': layer_buttons,
+                    'direction': 'down',
+                    'showactive': True,
+                    'x': 1.1,
+                    'y': 0.2,
+                    'xanchor': 'left',
+                    'yanchor': 'top'
+                },
                 # Кнопки управления анимацией
                 {
                     'type': 'buttons',
                     'showactive': False,
+                    'x': 1.1,
+                    'y': 0,
+                    'xanchor': 'left',
+                    'yanchor': 'top',
                     'buttons': [
                         dict(label='Play',
                              method='animate',
-                             args=[None, {'frame': {'duration': 500, 'redraw': True},
-                                          'fromcurrent': True}]),
+                             args=[None, {
+                                 'frame': {'duration': 500, 'redraw': True},
+                                 'fromcurrent': True,
+                                 'transition': {'duration': 100}
+                             }]),
                         dict(label='Pause',
                              method='animate',
-                             args=[[None], {'frame': {'duration': 0, 'redraw': True},
-                                            'mode': 'immediate',
-                                            'transition': {'duration': 0}}])
-                    ],
-                    'x': 0.1,
-                    'y': 0
-                },
-                # Кнопки переключения между слоями
-                {
-                    'buttons': buttons,
-                    'direction': 'down',
-                    'showactive': True,
-                    'x': 0,
-                    'y': 0
+                             args=[[None], {
+                                 'frame': {'duration': 0, 'redraw': True},
+                                 'mode': 'immediate',
+                                 'transition': {'duration': 0}
+                             }])
+                    ]
                 }
             ],
             sliders=[{
@@ -382,7 +558,7 @@ class BatchWeightVisualizer:
                 'xanchor': 'left',
                 'currentvalue': {
                     'font': {'size': 16},
-                    'prefix': 'Current: ',
+                    'prefix': f'{first_layer} - ',
                     'visible': True,
                     'xanchor': 'right'
                 },
@@ -391,12 +567,25 @@ class BatchWeightVisualizer:
                 'len': 0.9,
                 'x': 0.1,
                 'y': 0,
-                'steps': slider_steps
+                'steps': first_layer_steps
             }],
-            title_text="Weight Distribution Evolution"
+            title={
+                'text': "Weight Distribution Evolution",
+                'y': 0.95,
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top'
+            },
+            xaxis_title="Weight Value",
+            yaxis_title="Frequency",
+            margin=dict(r=200)  # Увеличиваем правый отступ для статистики
         )
-
+    
+        # Устанавливаем фреймы
+        fig.frames = frames
+    
         return fig
+
 
 # Создаем визуализатор
 visualizer = BatchWeightVisualizer()
@@ -405,14 +594,21 @@ visualizer = BatchWeightVisualizer()
 model_dir = 'D://Neuron/old_models'
 visualizer.load_all_checkpoints(model_dir)
 
+max_epoch = max(visualizer.weight_history)
+max_batch = max(visualizer.weight_history[max_epoch])
+savefile = f'e{max_epoch}b{max_batch}.html'
+
 # Создаем и показываем анимацию эволюции весов
 weight_evolution_fig = visualizer.create_weight_evolution_animation()
 weight_evolution_fig.show()
+weight_evolution_fig.write_html('weight_evol_anim' + savefile)
 
 # Показываем эволюцию метрик
 metrics_fig = visualizer.plot_metrics_evolution()
 metrics_fig.show()
+metrics_fig.write_html('metrics_evo ' + savefile)
 
 # Показываем анимацию распределения весов
 distribution_fig = visualizer.create_layer_weight_distribution_animation()
 distribution_fig.show()
+distribution_fig.write_html('layer_weight_distribution ' + savefile)
