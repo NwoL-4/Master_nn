@@ -14,14 +14,14 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 main_dir = './Dataset'
 # main_dir = 'D://Neuron/Dataset'
 current_dir = '(0.0001, 0.001, 0.01)_(20, 20, 100)'
-model_dir = 'models'
+model_dir = 'LeakyReLU'
 
 batch_size = 16
 num_epochs = 100
 
 train_size = 0.8    # Доля датасета для обучения
 
-log_interval, save_interval = 1, 1
+log_interval, save_interval = 50, 50
 
 grid_size = tuple(np.fromstring(current_dir.split('_')[1][1:-1], sep=', ', dtype=np.int64).tolist())
 space_size = tuple(np.fromstring(current_dir.split('_')[0][1:-1], sep=', ', dtype=DTYPE))
