@@ -1,5 +1,6 @@
 import glob
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,25 @@ import plotly.graph_objects as go
 import torch
 import tqdm
 from plotly.subplots import make_subplots
+
+
+class VisualizationConfig:
+    class Paths:
+        neuron_dir = 'D://Neuron'
+        models_dir = 'models'
+        choiced_model = 'LeakyRelU'
+        output_dir = 'visualizations'
+
+        choiced_dataset = '(0.0001, 0.001, 0.01)_(20, 20, 100)'
+
+
+    class Config:
+        len_files = 'all' # 'all', 'half' or int
+        use_log_scale = False
+        show_after_run = False
+        vis_file = '11958.npz'
+        axes_projection = 'zx'
+        use_model = False
 
 
 class BatchWeightVisualizer:
@@ -47,6 +67,12 @@ class BatchWeightVisualizer:
         batch_idx = checkpoint['batch_idx']
         state_dict = checkpoint['model_state_dict']
 
+        add_text = False
+
+        keys = list(state_dict.keys())
+        if 'module.' in keys[0]:
+            add_text = True
+
         # Инициализируем структуры данных если нужно
         if epoch not in self.weight_history:
             self.weight_history[epoch] = {}
@@ -55,8 +81,13 @@ class BatchWeightVisualizer:
         # Извлекаем веса
         weights_data = {}
         for layer_name in self.layer_names:
-            if layer_name + '.weight' in state_dict:
-                weights = state_dict[layer_name + '.weight'].cpu().numpy()
+            layer_text = layer_name + '.weight'
+
+            if add_text:
+                layer_text = 'module.' + layer_text
+
+            if layer_text in state_dict:
+                weights = state_dict[layer_text].cpu().numpy()
                 weights_data[layer_name] = {
                     'name': layer_name,
                     'mean': np.mean(weights),
@@ -840,53 +871,53 @@ class BatchWeightVisualizer:
         return fig, f"{axes_projection}-{Path(select_file).name.split('.')[0]}"
 
 
-# Загружаем все чекпоинты
-neuron_dir = 'D://Neuron/'
-model_dir = 'old_model'
-outputs_folder = 'visualizations'
-len_files = 5 # 'all' or int
-log_metrics = True
-show_after_run = False
-grid_space = '(0.0001, 0.001, 0.01)_(20, 20, 100)'
-axes_projection = 'zx'
-file = 'random'
-use_model = False
+def main():
+    config = VisualizationConfig
+    paths = config.Paths
+    config = config.Config
 
-# Создаем визуализатор
-visualizer = BatchWeightVisualizer()
+    visualizer = BatchWeightVisualizer()
 
-visualizer.load_all_checkpoints(os.path.join(neuron_dir, model_dir), len_files)
-max_epoch = max(visualizer.weight_history)
-max_batch = max(visualizer.weight_history[max_epoch])
-save_dir = os.path.join(neuron_dir, outputs_folder, model_dir, f'e{max_epoch}-b{max_batch}')
-os.makedirs(save_dir, exist_ok=True)
+    visualizer.load_all_checkpoints(
+        model_dir=os.path.join(paths.neuron_dir, paths.models_dir, paths.choiced_model),
+        len_files=config.len_files
+    )
 
-# Создаем и показываем анимацию эволюции весов
-weight_evolution_fig = visualizer.create_weight_evolution_animation()
-print('weight_evolution_fig successfully created')
-# Показываем эволюцию метрик
-metrics_fig = visualizer.plot_metrics_evolution(log_metrics)
-print('metrics_fig successfully created')
-# Показываем анимацию распределения весов
-distribution_fig = visualizer.create_layer_weight_distribution_animation()
-print('distribution_fig successfully created')
-# Показываем анимацию проекцию силового поля
-field_fig, select_file = visualizer.create_force_field_visualization(
-    file=file,
-    path=os.path.join(neuron_dir, 'Dataset', grid_space),
-    axes_projection=axes_projection,
-    use_model=use_model,
-)
-print('field_fig successfully created')
+    max_epoch = max(visualizer.weight_history)
+    max_batch = max(visualizer.weight_history[max_epoch])
+
+    save_dir = os.path.join(paths.neuron_dir, paths.output_dir, paths.choiced_model.lower(), f'e{max_epoch}b{max_batch}')
+    os.makedirs(save_dir, exist_ok=True)
+
+    start = time.time()
+    weight_evolution_fig = visualizer.create_weight_evolution_animation()
+    print(f'weight_evolution_fig successfully created: {time.time() - start} c.')
+    start = time.time()
+    metrics_fig = visualizer.plot_metrics_evolution(log=config.use_log_scale)
+    print(f'metrics_fig successfully created: {time.time() - start} c.')
+    start = time.time()
+    distribution_fig = visualizer.create_layer_weight_distribution_animation()
+    print(f'distribution_fig successfully created: {time.time() - start} c.')
+    start = time.time()
+    field_fig, select_file = visualizer.create_force_field_visualization(
+        file=config.vis_file,
+        path=os.path.join(paths.neuron_dir, 'Dataset', paths.choiced_dataset),
+        axes_projection=config.axes_projection,
+        use_model=config.use_model,
+    )
+    print(f'field_fig successfully created: {time.time() - start} c.')
+
+    weight_evolution_fig.write_html(os.path.join(save_dir, 'weight_evolution.html'))
+    metrics_fig.write_html(os.path.join(save_dir, 'metrics_evolution.html'))
+    distribution_fig.write_html(os.path.join(save_dir, 'distribution_evolution.html'))
+    field_fig.write_html(os.path.join(Path(save_dir).parent, f'{select_file}.html'))
+
+    if config.show_after_run:
+        weight_evolution_fig.show()
+        metrics_fig.show()
+        distribution_fig.show()
+        field_fig.show()
 
 
-weight_evolution_fig.write_html(os.path.join(save_dir, 'weight_evolution.html'))
-metrics_fig.write_html(os.path.join(save_dir, 'metrics_evolution.html'))
-distribution_fig.write_html(os.path.join(save_dir, 'distribution_evolution.html'))
-field_fig.write_html(os.path.join(Path(save_dir).parent, f'{select_file}.html'))
-
-if show_after_run:
-    weight_evolution_fig.show()
-    metrics_fig.show()
-    distribution_fig.show()
-    field_fig.show()
+if __name__ == '__main__':
+    main()
