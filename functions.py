@@ -1,12 +1,16 @@
+import datetime
 import glob
 import os
 
-import numpy as np
 import torch
 from numba import prange, njit
+import numpy as np
 
-import constants
-from constants import *
+from constants import DTYPE, TORCH_DTYPE
+
+
+def log_message(text):
+    return f'{datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")}---{text}\n'
 
 
 def get_latest_model_path(model_dir):
@@ -39,7 +43,7 @@ def particles_to_grid_density(particles,
     """
 
     # Создаем пустую сетку для плотности заряда
-    charge_density = torch.zeros(grid_size, device=particles.device, dtype=constants.TORCH_DTYPE)
+    charge_density = torch.zeros(grid_size, device=particles.device, dtype=TORCH_DTYPE)
 
     # Вычисляем шаги сетки по каждому направлению
     dx = space_size[0] / (grid_size[0] - 1)
