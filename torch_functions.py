@@ -6,6 +6,7 @@ import torch
 from scipy.constants import epsilon_0
 from torch import nn, optim
 
+import functions
 from constants import *
 
 EPSILON = 1e-10
@@ -165,17 +166,22 @@ def train_model(model,
                 l_rate=0.001,
                 num_epochs=100,
                 device=torch.device('cuda'),
-                model_dir='models',
+                save_dir='models',
                 start_epoch=0,
                 log_interval=10,
-                save_interval=10):
-    os.makedirs(model_dir, exist_ok=True)
+                save_interval=10,
+                text=''):
+
+    val_dir = os.path.join(save_dir, 'validation')
+    os.makedirs(val_dir, exist_ok=True)
+
+    text += f"{functions.log_message('Started training model')}"
 
     model = model.to(device)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=l_rate)
 
-    model_files = glob.glob(os.path.join(model_dir, "cnn_model_*.pth"))
+    model_files = glob.glob(os.path.join(save_dir, "cnn_model_*.pth"))
     last_save_num = len(model_files)
 
     # Очищаем память перед началом обучения
@@ -183,6 +189,8 @@ def train_model(model,
         torch.cuda.empty_cache()
 
     start_time = time.time()
+
+    text += f"{functions.log_message('Started epochs model')}\n"
 
     for epoch in range(start_epoch, num_epochs, 1):
         print(f"\nEpoch {epoch + 1}/{num_epochs}")
@@ -212,11 +220,13 @@ def train_model(model,
                 mse_loss = criterion(model_field, train_field)
                 gauss_loss = check_gauss_law(density, model_field / K_CONST, space_size, device)
                 poisson_loss = check_poisson_equation(density, model_field / K_CONST, space_size, device)
+
                 # Общая функция потерь (с весами)
                 total_loss = (
-                        mse_loss +
-                        # 0.1 * poisson_loss.mean()
-                        0.1 * gauss_loss.mean()
+                    mse_loss +
+                    # 0.1 * poisson_loss.mean()
+                    # 0.1 * gauss_loss.mean()
+                    0
                 )
 
                 total_loss.backward()
@@ -230,7 +240,7 @@ def train_model(model,
 
                 if batch_idx > 0 and batch_idx % save_interval == 0:
                     last_save_num += 1
-                    save_path = os.path.join(model_dir, f"cnn_model_{last_save_num}.pth")
+                    save_path = os.path.join(save_dir, f"cnn_model_{last_save_num}.pth")
                     torch.save({
                         'epoch': epoch,
                         'batch_idx': batch_idx,
@@ -250,6 +260,10 @@ def train_model(model,
                 del model_field, mse_loss, poisson_loss, gauss_loss, total_loss
                 if device == 'cuda':
                     torch.cuda.empty_cache()
+
+                text += f"{functions.log_message(f'e{epoch}b{batch_idx} success')}"
+                with open(os.path.abspath(os.path.join(save_dir, 'log.txt')), 'w', encoding='utf-8') as f:
+                    f.write(text)
             except Exception as e:
                 # print(f"Error in batch {batch_idx}: {e}")
                 raise ValueError(e)
@@ -257,18 +271,24 @@ def train_model(model,
 
         # Валидация
         model.eval()
+
         val_loss = 0
         with torch.no_grad():
-            for density, train_field in val_loader:
+            for val_idx, (density, train_field) in enumerate(val_loader):
                 density = density.to(device)
+
                 train_field = train_field.to(device)
                 model_field = model(density)
+
                 val_loss += criterion(model_field, train_field).item()
 
                 # Очищаем память после валидации
                 del model_field
                 if device == 'cuda':
                     torch.cuda.empty_cache()
+                text += f"{functions.log_message(f'e{epoch}v{val_idx} success')}\n"
             torch.save({
                 'val_loss': val_loss
-            }, os.path.join('validation', 'val_loss_{epoch}.pth'))
+            }, os.path.join(val_dir, f'val_loss_{epoch}.pth'))
+            with open(os.path.abspath(os.path.join(save_dir, 'log.txt')), 'w', encoding='utf-8') as f:
+                f.write(text)
