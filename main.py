@@ -88,7 +88,7 @@ def main():
             f'len dataset: {len(dataset)}\n'
             f'len trainset: {len(train_dataset)}\n'
             f'len valset: {len(val_dataset)}\n\n'
-            f'save every: {None}\n'
+            f'batch size: {model_config.batch_size}\n'
             f'save path: {os.path.abspath(paths.save_dir)}\n'
             f'log path: {os.path.join(paths.save_dir, "log.txt")}\n\n'
             )
