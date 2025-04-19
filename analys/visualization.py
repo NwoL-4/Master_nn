@@ -27,7 +27,7 @@ class VisualizationConfig:
         len_files = 'all' # 'all', 'half' or int
         use_log_scale = False
         show_after_run = False
-        vis_file = '11958.npz'
+        vis_file = '5626.npz'
         axes_projection = 'zx'
         use_model = False
 
@@ -665,11 +665,7 @@ class BatchWeightVisualizer:
         Создает визуализацию силового поля с интерактивными элементами
 
         Parameters:
-
-
     ----
-
-
         file : str
             Имя файла или 'random' для случайного выбора
         path : str
@@ -731,9 +727,9 @@ class BatchWeightVisualizer:
 
         # Создание базового графика
         fig = make_subplots(
-            rows=2 if use_model else 1,
+            rows=1,
             cols=1,
-            subplot_titles=['Обучающее поле'] + (['Поле модели'] if use_model else []),
+            subplot_titles=['Обучающее поле'],
             vertical_spacing=0.1
         )
 
@@ -807,7 +803,7 @@ class BatchWeightVisualizer:
 
         # Обновляем layout
         fig.update_layout(
-            title=f"Силовое поле (проекция {axes_projection.upper()})",
+            title=f"Силовое поле (проекция {axes_projection.upper()}): число частиц-{particle.shape[1]}",
             showlegend=True,
             # Добавляем слайдер
             sliders=[dict(
@@ -868,7 +864,7 @@ class BatchWeightVisualizer:
         # Добавляем фреймы
         fig.frames = frames
 
-        return fig, f"{axes_projection}-{Path(select_file).name.split('.')[0]}"
+        return fig, f"{Path(select_file).name.split('.')[0]}-{particle.shape[1]}-{axes_projection}"
 
 
 def main():
@@ -886,7 +882,7 @@ def main():
     max_epoch = max(visualizer.weight_history)
     max_batch = max(visualizer.weight_history[max_epoch])
 
-    save_dir = os.path.join(paths.neuron_dir, paths.output_dir, paths.choiced_model.lower(), f'e{max_epoch}b{max_batch}')
+    save_dir = os.path.join(paths.neuron_dir, paths.output_dir, paths.choiced_model.lower(), f'e{max_epoch}-b{max_batch}')
     os.makedirs(save_dir, exist_ok=True)
 
     start = time.time()
