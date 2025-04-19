@@ -2,8 +2,6 @@ import glob
 import os
 import random
 
-import numpy as np
-import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset
@@ -40,12 +38,12 @@ class ElectricFieldDataset(Dataset):
             # Преобразуем частицы в плотность заряда
             density = functions.particles_to_grid_density(particles, self.grid_size, self.space_size)
             if torch.isnan(density).any() or torch.isnan(field).any():
-                print(f"Предупреждение: Значение равно NaN для файла {os.path.basename(current_file)}")
+                Warning(f"Предупреждение: Значение равно NaN для файла {os.path.basename(current_file)}")
                 return None
 
             return density.unsqueeze(0), field
         except Exception as e:
-            print(f'Error processing file {os.path.basename(current_file)}: {str(e)}')
+            Warning(f'Error processing file {os.path.basename(current_file)}: {str(e)}')
 
 
 class CustomDataLoader:
@@ -74,7 +72,6 @@ class CustomDataLoader:
     def _collate_batch(self, batch):
         density = torch.stack([item[0] for item in batch])
         field = torch.stack([item[1] for item in batch])
-        print()
         return density, field
 
     def __len__(self):
