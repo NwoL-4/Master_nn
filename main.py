@@ -97,7 +97,7 @@ def main():
     if latest_model_path:
         text += f'{datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S:.2f")}---Loading latest model from {latest_model_path}'
         checkpoint = torch.load(latest_model_path)
-        model.load_state_dict(checkpoint['state_dict'])
+        model.load_state_dict(checkpoint['model_state_dict'])
         start_epoch = checkpoint['epoch']
 
         text += f'Continuing training from epoch {start_epoch}'
