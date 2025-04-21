@@ -11,6 +11,10 @@ import plotly.graph_objects as go
 import torch
 import tqdm
 from plotly.subplots import make_subplots
+from torch import nn
+
+import functions
+from torch_classes import ElectricFieldCNN
 
 
 class VisualizationConfig:
@@ -22,14 +26,21 @@ class VisualizationConfig:
 
         choiced_dataset = '(0.0001, 0.001, 0.01)_(20, 20, 100)'
 
+        space_size, grid_size = [np.fromstring(value[1:-1], sep=', ', dtype=dtype)
+                                 for value, dtype in zip(choiced_dataset.split('_'), [np.float64, np.int64])
+                                 ]
+        grid_size = tuple(grid_size.tolist())
+
 
     class Config:
         len_files = 'all' # 'all', 'half' or int
         use_log_scale = False
         show_after_run = False
-        vis_file = '5626.npz'
-        axes_projection = 'zx'
-        use_model = False
+        vis_file = 'random' # '*.pnz' or 'random'
+        axes_projection = 'xy'
+        use_model = True
+
+        exctract_model = 5 # 'all' or int - extract last int models
 
 
 class BatchWeightVisualizer:
@@ -326,7 +337,7 @@ class BatchWeightVisualizer:
                 })
 
         df = pd.DataFrame(data).sort_values(by='batch')
-        
+
         if log:
             df['train_loss'] = np.log(df['train_loss'])
             df['gauss_loss'] = np.log(df['gauss_loss'])
@@ -400,6 +411,9 @@ class BatchWeightVisualizer:
             for batch in self.weight_history[epoch]:
                 for layer_name, layer_data in self.weight_history[epoch][batch].items():
                     hist_values, hist_bins = layer_data['hist']
+                    sum_values = np.sum(hist_values)
+                    hist_values = hist_values / sum_values
+
                     bin_centers = (hist_bins[:-1] + hist_bins[1:]) / 2
 
                     data.extend([{
@@ -414,7 +428,8 @@ class BatchWeightVisualizer:
                         'std': layer_data['std'],
                         'min': layer_data['min'],
                         'max': layer_data['max'],
-                        'median': layer_data['median']
+                        'median': layer_data['median'],
+                        'sum': sum_values,
                     } for bin_center, freq, left, right in zip(
                         bin_centers,
                         hist_values,
@@ -445,6 +460,7 @@ class BatchWeightVisualizer:
 
                     stats_text = (
                         f"Statistics:<br>"
+                        f"Sum: {batch_data['sum'].sum()}<br>"
                         f"Mean: {batch_data['mean'].iloc[0]:.6f}<br>"
                         f"Std: {batch_data['std'].iloc[0]:.6f}<br>"
                         f"Min: {batch_data['min'].iloc[0]:.6f}<br>"
@@ -569,12 +585,12 @@ class BatchWeightVisualizer:
         first_layer = df['layer'].unique()[0]
         first_layer_frames = [frame for frame in frames if frame.name.startswith(first_layer)]
         first_layer_steps = []
-    
+
         for frame in first_layer_frames:
             epoch_batch = frame.name.split('_')
             epoch = epoch_batch[2]
             batch = epoch_batch[4]
-    
+
             first_layer_steps.append({
                 'args': [
                     [frame.name],
@@ -585,7 +601,7 @@ class BatchWeightVisualizer:
                 'label': f'E{epoch}B{batch}',
                 'method': 'animate'
             })
-    
+
         # Обновляем layout
         fig.update_layout(
             updatemenus=[
@@ -649,14 +665,20 @@ class BatchWeightVisualizer:
                 'xanchor': 'center',
                 'yanchor': 'top'
             },
-            xaxis_title="Weight Value",
-            yaxis_title="Frequency",
+            xaxis=dict(
+                title="Weight Value",
+                range=[-0.5, 0.5],
+            ),
+            yaxis=dict(
+                title='Frequency',
+                range=[0, 1],
+            ),
             margin=dict(r=200)  # Увеличиваем правый отступ для статистики
         )
-    
+
         # Устанавливаем фреймы
         fig.frames = frames
-    
+
         return fig
 
     @staticmethod
@@ -677,8 +699,41 @@ class BatchWeightVisualizer:
         **kwargs : dict
             Дополнительные параметры (model для use_model=True)
         """
-        if use_model and kwargs.get('model', None) is None:
-            raise ValueError('Added kwarg model')
+        if use_model:
+            if kwargs.get('model', None) is None:
+                raise ValueError('Added kwarg model')
+            if kwargs.get('model_saves', None) is None:
+                raise ValueError('Added kwarg model_saves')
+            if kwargs.get('grid_size', None) is None:
+                raise ValueError('Added kwarg grid_size')
+            if kwargs.get('space_size', None) is None:
+                raise ValueError('Added kwarg space_size')
+
+            name_models = glob.glob(os.path.join(kwargs['model_saves'], 'cnn_model_*.pth'))
+            numbers = sorted([int(f.split('_')[-1].split('.')[0]) for f in name_models])
+
+            numbers = numbers if kwargs.get('extract_model', 'all') == 'all' else numbers[-kwargs['extract_model']:]
+
+            models = []
+            for name_model in tqdm.tqdm(numbers, leave=False, desc=f'Loading models'):
+                model = dict()
+                checkpoint = torch.load(os.path.join(kwargs['model_saves'], f'cnn_model_{name_model}.pth'),
+                                        map_location=torch.device('cpu'))
+                model['epoch'] = checkpoint['epoch']
+                model['batch'] = checkpoint['batch_idx']
+                model['model']: nn.Module = kwargs['model']()
+
+                state_dict = checkpoint['model_state_dict']
+
+                new_dict = dict()
+                for key_from_model in model['model'].state_dict().keys():
+                    for key_from_save, value in state_dict.items():
+                        if key_from_model in key_from_save:
+                            new_dict[key_from_model] = value
+
+                model['model'].load_state_dict(new_dict)
+
+                models.append(model)
 
         # Загрузка данных
         if file == 'random':
@@ -738,7 +793,18 @@ class BatchWeightVisualizer:
         frames = []
         slider_steps = []
 
-        for i, z_val in enumerate(z_range):
+        if use_model:
+            density = functions.particles_to_grid_density(
+                torch.from_numpy(particle).type(torch.float64),
+                kwargs['grid_size'],
+                kwargs['space_size']
+            ).unsqueeze(0)
+
+            for model in tqdm.tqdm(models, desc='Exctract models field', leave=False):
+                predict_field: torch.Tensor = model['model'](torch.stack([density])).detach().numpy()[0]
+                model['field'] = np.transpose(predict_field, axes_order) / (max_field * 500)
+
+        for i, z_val in tqdm.tqdm(enumerate(z_range), desc='Create plots', total=z_range.shape[0], leave=False):
             # Получаем компоненты векторного поля для текущего слоя
             u = field[x_idx, :, :, i]
             v = field[y_idx, :, :, i]
@@ -752,19 +818,44 @@ class BatchWeightVisualizer:
                 marker=dict(
                     colorscale='viridis'
                 ),
-                name='Force field'
+                name='Force field',
             )
+
+            if use_model:
+                for model in models:
+                    u = model['field'][x_idx, :, :, i]
+                    v = model['field'][y_idx, :, :, i]
+
+                    model_fig = ff.create_quiver(
+                        X, Y, u, v,
+                        scale=0.1, arrow_scale=0.01, angle=np.pi/20,
+                        marker=dict(
+                            colorscale='viridis'
+                        ),
+                        name=f'Predicted field: e{model["epoch"]}-b{model["batch"]}',
+                        visible='legendonly'
+                    )
+                    model['fig'] = model_fig
 
             # Добавляем ближайшие частицы
             diff = np.diff(z_range)[0] * 0.95 if len(z_range) > 1 else 0.1
             nearby_mask = np.abs(particle[z_idx] - z_val) <= diff
             nearby_particles = particle[:, nearby_mask]
 
+            models_fig = []
+            if use_model:
+                for model in models:
+                    models_fig.append(
+                        *model['fig'].data
+                    )
+
             # Создаем кадр
             frame = go.Frame(
                 data=[
                     # Данные quiver plot
                     *quiver_fig.data,
+                    # Данные от models
+                    *(models_fig if use_model else []),
                     # Точки ближайших частиц
                     go.Scatter(
                         x=nearby_particles[x_idx],
@@ -775,7 +866,7 @@ class BatchWeightVisualizer:
                             color=['#890000' if particle == -1 else '#100089' for particle in nearby_particles[3]],
                         ),
                         name='Nearby particles'
-                    )
+                    ),
                 ],
                 name=f'frame_{i}'
             )
@@ -864,7 +955,11 @@ class BatchWeightVisualizer:
         # Добавляем фреймы
         fig.frames = frames
 
-        return fig, f"{Path(select_file).name.split('.')[0]}-{particle.shape[1]}-{axes_projection}"
+        path = f"{Path(select_file).name.split('.')[0]}-{particle.shape[1]}-{axes_projection}"
+        if use_model:
+            path += f'-m{len(models)}' if kwargs.get('exctract_model', 'all') == 'all' else f'last{len(models)}'
+
+        return fig, path
 
 
 def main():
@@ -900,6 +995,11 @@ def main():
         path=os.path.join(paths.neuron_dir, 'Dataset', paths.choiced_dataset),
         axes_projection=config.axes_projection,
         use_model=config.use_model,
+        model=ElectricFieldCNN,
+        model_saves=os.path.join(paths.neuron_dir, 'models', paths.choiced_model),
+        grid_size=paths.grid_size,
+        space_size=paths.space_size,
+        extract_model=config.exctract_model
     )
     print(f'field_fig successfully created: {time.time() - start} c.')
 
