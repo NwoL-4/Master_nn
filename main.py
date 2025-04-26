@@ -95,7 +95,7 @@ def main():
     start_epoch = 0
     latest_model_path = functions.get_latest_model_path(paths.save_dir)
     if latest_model_path:
-        text += f'{datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S:.2f")}---Loading latest model from {latest_model_path}'
+        text += f'{functions.log_message(f"Latest model path: {latest_model_path}")}\n'
         checkpoint = torch.load(latest_model_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         start_epoch = checkpoint['epoch']
