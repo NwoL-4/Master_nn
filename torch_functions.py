@@ -272,7 +272,11 @@ def train_model(model,
         # Валидация
         model.eval()
 
-        val_loss = 0
+        val_loss = dict(
+            mse_loss=0,
+            poisson_loss=0,
+            gauss_loss=0,
+        )
         with torch.no_grad():
             for val_idx, (density, train_field) in enumerate(val_loader):
                 density = density.to(device)
@@ -280,7 +284,9 @@ def train_model(model,
                 train_field = train_field.to(device)
                 model_field = model(density)
 
-                val_loss += criterion(model_field, train_field).item()
+                val_loss['mse_loss'] += criterion(model_field, train_field).item()
+                val_loss['gauss_loss'] += check_gauss_law(density, model_field / K_CONST, space_size, device)
+                val_loss['poisson_loss'] += check_poisson_equation(density, model_field / K_CONST, space_size, device)
 
                 # Очищаем память после валидации
                 del model_field
