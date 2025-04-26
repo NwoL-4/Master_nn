@@ -22,7 +22,6 @@ class ElectricFieldDataset(Dataset):
     def __getitem__(self, idx):
         current_file = self.data_files[idx]
         try:
-
             with np.load(current_file) as data:
                 particles = torch.from_numpy(data['particle']).type(TORCH_DTYPE)
                 if 'charge' in list(data.keys()):
@@ -36,7 +35,7 @@ class ElectricFieldDataset(Dataset):
                 return None
 
             # Преобразуем частицы в плотность заряда
-            density = functions.particles_to_grid_density(particles, self.grid_size, self.space_size)
+            density = functions.optimize_particles_to_grid_density(particles, self.grid_size, self.space_size)
             if torch.isnan(density).any() or torch.isnan(field).any():
                 Warning(f"Предупреждение: Значение равно NaN для файла {os.path.basename(current_file)}")
                 return None
