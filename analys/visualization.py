@@ -33,11 +33,11 @@ class VisualizationConfig:
 
 
     class Config:
-        len_files = 'all' # 'all', 'half' or int
+        len_files = 50 # 'all', 'half' or int
         use_log_scale = False
         show_after_run = False
-        vis_file = 'random' # '*.pnz' or 'random'
-        axes_projection = 'xy'
+        vis_file = '5626.npz' # '*.pnz' or 'random'
+        axes_projection = 'zx'
         use_model = True
 
         exctract_model = 5 # 'all' or int - extract last int models
@@ -125,7 +125,7 @@ class BatchWeightVisualizer:
         """
         patern = os.path.join(model_dir, 'cnn_model_*.pth')
         files = glob.glob(patern)
-        numbers = sorted([int(f.split('_')[-1].split('.')[0]) for f in files])
+        numbers = sorted([int(f.split('_')[-1].split('.')[0]) for f in files])[::-1]
 
         if isinstance(len_files, int):
             numbers = numbers[:len_files]
@@ -301,10 +301,12 @@ class BatchWeightVisualizer:
                 ]
             }],
             sliders=[{
-                'currentvalue': {'prefix': 'Epoch: '},
+                'currentvalue': {'prefix': 'Epoch: ',
+                                 'visible': True},
+                'active': 0,
                 'pad': {"t": 50},
                 'steps': [{'method': 'animate',
-                           'label': f'Epoch {epoch}',
+                           'label': f'{epoch}',
                            'args': [[f'epoch_{epoch}'], {'frame': {'duration': 0, 'redraw': True},
                                                          'mode': 'immediate',
                                                          'transition': {'duration': 0}}]}
@@ -336,7 +338,7 @@ class BatchWeightVisualizer:
                     **metrics
                 })
 
-        df = pd.DataFrame(data).sort_values(by='batch')
+        df = pd.DataFrame(data).sort_values(by=['epoch', 'batch'])
 
         if log:
             df['train_loss'] = np.log(df['train_loss'])
@@ -721,6 +723,7 @@ class BatchWeightVisualizer:
                                         map_location=torch.device('cpu'))
                 model['epoch'] = checkpoint['epoch']
                 model['batch'] = checkpoint['batch_idx']
+                model['name'] = f'cnn_model_{name_model}'
                 model['model']: nn.Module = kwargs['model']()
 
                 state_dict = checkpoint['model_state_dict']
@@ -794,7 +797,7 @@ class BatchWeightVisualizer:
         slider_steps = []
 
         if use_model:
-            density = functions.particles_to_grid_density(
+            density = functions.optimize_particles_to_grid_density(
                 torch.from_numpy(particle).type(torch.float64),
                 kwargs['grid_size'],
                 kwargs['space_size']
@@ -832,7 +835,7 @@ class BatchWeightVisualizer:
                         marker=dict(
                             colorscale='viridis'
                         ),
-                        name=f'Predicted field: e{model["epoch"]}-b{model["batch"]}',
+                        name=f'cnn_model_{model["name"]}.pth',
                         visible='legendonly'
                     )
                     model['fig'] = model_fig
@@ -855,7 +858,7 @@ class BatchWeightVisualizer:
                     # Данные quiver plot
                     *quiver_fig.data,
                     # Данные от models
-                    *(models_fig if use_model else []),
+                    *models_fig,
                     # Точки ближайших частиц
                     go.Scatter(
                         x=nearby_particles[x_idx],
@@ -1001,12 +1004,13 @@ def main():
         space_size=paths.space_size,
         extract_model=config.exctract_model
     )
+    save_dir = os.path.join(paths.neuron_dir, paths.output_dir, paths.choiced_model.lower())
     print(f'field_fig successfully created: {time.time() - start} c.')
 
     weight_evolution_fig.write_html(os.path.join(save_dir, 'weight_evolution.html'))
     metrics_fig.write_html(os.path.join(save_dir, 'metrics_evolution.html'))
     distribution_fig.write_html(os.path.join(save_dir, 'distribution_evolution.html'))
-    field_fig.write_html(os.path.join(Path(save_dir).parent, f'{select_file}.html'))
+    field_fig.write_html(os.path.join(Path(save_dir), f'{select_file}.html'))
 
     if config.show_after_run:
         weight_evolution_fig.show()
